@@ -1,0 +1,7 @@
+# OS / editores
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+
+# nada de build/deps aqui — app é vanilla
