@@ -6,7 +6,9 @@ import * as db from "./db.js";
 import { calcGoals } from "./db.js";
 import { MEAL_TYPES } from "./data.js";
 import { lineChart, barChart } from "./charts.js";
-import { OMEGA_SVG, haptic, sparks, celebrateSeal, celebrateGloria, celebrateTributo, countUp } from "./celebrate.js";
+import { OMEGA_SVG, haptic, sparks, celebrateSeal, celebrateGloria, celebrateTributo, celebrateAscension, countUp } from "./celebrate.js";
+import { computeSaga, RANKS, ACHIEVEMENTS } from "./saga.js";
+import { spartanSVG } from "./spartan.js";
 
 // ----------------------------- estado --------------------------------
 const S = {
@@ -126,6 +128,7 @@ function modal(title, bodyHTML, onMount, opts = {}) {
 // =====================================================================
 const NAV = [
   { id: "hoje", label: "Hoje", icon: "M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" },
+  { id: "saga", label: "Saga", icon: "M12 2l7 3v6c0 4.5-3 8-7 11-4-3-7-6.5-7-11V5z" },
   { id: "treino", label: "Treino", icon: "M6.5 6.5l11 11M3 7l4-4 3 3-4 4zM21 17l-4 4-3-3 4-4z" },
   { id: "comida", label: "Comida", icon: "M4 3v7a3 3 0 0 0 6 0V3M7 3v18M17 3c-1.5 1-2 3-2 6s.5 4 2 4v8" },
   { id: "evolucao", label: "Evolução", icon: "M3 17l6-6 4 4 7-7M14 8h7v7" },
@@ -157,6 +160,49 @@ function render() {
 async function dayTotals(iso) {
   const log = await db.getByIndex("foodlog", "date", iso);
   return log.reduce((acc, e) => addMacros(acc, e), emptyMacros());
+}
+
+// =====================================================================
+// SAGA (RPG) — cálculo + detecção de level-up/conquistas
+// =====================================================================
+async function currentSaga() {
+  const [sessions, foodlog, bodylog] = await Promise.all([
+    db.getAll("sessions"), db.getAll("foodlog"), db.getAll("bodylog"),
+  ]);
+  return computeSaga(sessions, foodlog, bodylog, S.profile);
+}
+
+function sagaSeenFrom(saga) {
+  return {
+    id: "state", level: saga.level, rankIndex: saga.rankIndex,
+    achievements: saga.achievements.filter((a) => a.unlocked).map((a) => a.id),
+  };
+}
+
+// silent=true (boot): só registra o estado, sem celebrar retroativo.
+// senão: celebra ascensão e conquistas novas desde a última vez.
+async function syncSaga({ silent = false, ascensionDelay = 300 } = {}) {
+  const saga = await currentSaga();
+  const seen = await db.get("saga", "state");
+  if (silent || !seen) { await db.put("saga", sagaSeenFrom(saga)); return saga; }
+
+  const prevAch = new Set(seen.achievements || []);
+  const newAch = saga.achievements.filter((a) => a.unlocked && !prevAch.has(a.id));
+  const leveledUp = saga.level > (seen.level || 1);
+  const rankUp = saga.rankIndex > (seen.rankIndex || 0);
+  await db.put("saga", sagaSeenFrom(saga));
+
+  let after = ascensionDelay;
+  if (leveledUp || rankUp) {
+    setTimeout(() => celebrateAscension({
+      rankName: saga.rank.name, level: saga.level,
+      avatarSVG: spartanSVG(saga.rank.tier, { glow: true }), isRankUp: rankUp,
+    }), ascensionDelay);
+    after = ascensionDelay + (rankUp ? 3000 : 2200);
+  }
+  newAch.forEach((a, i) => setTimeout(() =>
+    toast(`Conquista — ${a.name}`, { omega: true, ms: 2600 }), after + i * 900));
+  return saga;
 }
 
 function macroCardHTML(g) {
@@ -318,6 +364,85 @@ function renderStreak(el, sessions) {
   if (streak >= 1) el.innerHTML = `<span class="streak-pill">${OMEGA_SVG} Fúria · ${streak} semana${streak > 1 ? "s" : ""}</span>`;
   else if (thisCount > 0) el.innerHTML = `<span class="streak-pill">${OMEGA_SVG} ${thisCount} batalha${thisCount > 1 ? "s" : ""} esta semana</span>`;
   else el.innerHTML = "";
+}
+
+// =====================================================================
+// VIEW: SAGA (RPG)
+// =====================================================================
+VIEWS.saga = () => {
+  const html = `
+    <header class="topbar"><div><h1>Saga</h1><p class="sub">A ascensão de ${esc(S.profile.name)}</p></div></header>
+    <section class="pad" id="sagaArea"><div class="loading">…</div></section>`;
+  return { html, async mount() { await renderSaga(); } };
+};
+
+const ATTR_META = [
+  { key: "forca", label: "Força", hint: "volume e recordes de carga" },
+  { key: "furia", label: "Fúria", hint: "constância e streak de treinos" },
+  { key: "vigor", label: "Vigor", hint: "disciplina na dieta (30 dias)" },
+  { key: "resiliencia", label: "Resiliência", hint: "tempo e dias de jornada" },
+];
+
+async function renderSaga() {
+  const root = $("#sagaArea");
+  if (!root) return;
+  const saga = await currentSaga();
+  const xpPct = saga.xpForLevel ? Math.min(100, (saga.xpIntoLevel / saga.xpForLevel) * 100) : 100;
+  const poderPct = Math.round((saga.poder / 400) * 100);
+  const nextRank = saga.nextRank;
+  const toNext = nextRank ? nextRank.minLevel - saga.level : 0;
+
+  const attrBar = (m) => {
+    const v = saga.attrs[m.key];
+    return `<div class="attr">
+      <div class="attr-top"><span>${m.label}</span><b>${v}</b></div>
+      <div class="attr-track"><div class="attr-fill attr-${m.key}" style="width:0" data-attr="${v}"></div></div>
+      <div class="attr-hint">${m.hint}</div>
+    </div>`;
+  };
+
+  const trophies = saga.achievements.map((a) => `
+    <div class="trophy ${a.unlocked ? "on" : "off"}" title="${esc(a.desc)}">
+      <div class="trophy-ic">${a.unlocked ? OMEGA_SVG : "🔒"}</div>
+      <div class="trophy-name">${esc(a.name)}</div>
+      <div class="trophy-desc">${esc(a.desc)}</div>
+    </div>`).join("");
+  const unlocked = saga.achievements.filter((a) => a.unlocked).length;
+
+  root.innerHTML = `
+    <div class="card hero-card">
+      <div class="hero-avatar tier${saga.rank.tier}">${spartanSVG(saga.rank.tier, { glow: true })}</div>
+      <div class="hero-rank">${esc(saga.rank.name)}</div>
+      <div class="hero-lvl">Nível <b>${saga.level}</b></div>
+      <div class="xp-track"><div class="xp-fill" style="width:0" data-xp="${xpPct}"></div></div>
+      <div class="xp-label">${saga.xpIntoLevel} / ${saga.xpForLevel} XP${nextRank ? ` · faltam ${toNext} nível${toNext > 1 ? "s" : ""} pra <b>${esc(nextRank.name)}</b>` : " · patente máxima"}</div>
+    </div>
+
+    <div class="card poder-card">
+      <div><div class="poder-num" data-poder="${saga.poder}">0</div><div class="poder-lab">Poder de Guerra · ${poderPct}%</div></div>
+      <div class="poder-omega">${OMEGA_SVG}</div>
+    </div>
+
+    <div class="section-label">Atributos</div>
+    <div class="card">${ATTR_META.map(attrBar).join("")}</div>
+
+    <div class="section-label">Troféus · ${unlocked}/${saga.achievements.length}</div>
+    <div class="trophy-grid">${trophies}</div>
+
+    <div class="section-label">Feitos de guerra</div>
+    <div class="card stat-grid">
+      <div><b>${saga.stats.sessions}</b><span>treinos</span></div>
+      <div><b>${r0(saga.stats.totalVolume)}</b><span>kg de volume</span></div>
+      <div><b>${saga.stats.totalPRs}</b><span>recordes</span></div>
+      <div><b>${saga.stats.proteinDays}</b><span>dias na meta</span></div>
+    </div>`;
+
+  // anima barras e o número de poder
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    root.querySelectorAll("[data-attr]").forEach((el) => { el.style.width = el.dataset.attr + "%"; });
+    const xp = root.querySelector("[data-xp]"); if (xp) xp.style.width = xp.dataset.xp + "%";
+  }));
+  countUp(root.querySelector("[data-poder]"), 0, saga.poder, 800, r0);
 }
 
 // =====================================================================
@@ -639,6 +764,8 @@ async function startSession(day) {
         toast(prs.length ? "Recorde inscrito na crônica" : "Treino selado", { omega: true });
       }, 240);
       render();
+      // ascensão entra DEPOIS da celebração do treino (gloria ~2.2s / selo ~1.4s)
+      syncSaga({ ascensionDelay: 240 + (prs.length ? 2500 : 1700) });
     });
   }, { onClose: stopRest });
 
@@ -818,6 +945,7 @@ async function commitFood(food, qty, meal, editEntry) {
   const paid = forToday ? await maybeTributo(m.p - oldP) : false;
   if (!paid) toast(editEntry ? "Quantidade atualizada" : "Adicionado");
   await refreshFoodViews();
+  syncSaga({ ascensionDelay: paid ? 3400 : 600 }); // bater meta pode subir nível
 }
 
 async function maybeTributo(addedP) {
@@ -1053,6 +1181,7 @@ function addBodyFlow() {
       if (!S.profile.manual) Object.assign(S.profile, calcGoals(S.profile));
       await db.put("profile", S.profile);
       close(); haptic("ok"); toast("Registrado na crônica"); render();
+      syncSaga({ ascensionDelay: 500 });
     });
   });
 }
@@ -1160,9 +1289,9 @@ VIEWS.perfil = () => {
         modal("Reduzir tudo a cinzas?", `<p style="margin-bottom:4px">Treinos, refeições e pesos serão apagados. Não dá pra desfazer.</p>
           <button class="btn-danger full" data-yes>Sim — cinzas</button>`, (back, close) => {
           $("[data-yes]", back).addEventListener("click", async () => {
-            for (const s of ["profile", "plan", "sessions", "foods", "foodlog", "bodylog"]) await db.clearStore(s);
+            for (const s of ["profile", "plan", "sessions", "foods", "foodlog", "bodylog", "saga"]) await db.clearStore(s);
             Object.keys(localStorage).filter((k) => k.startsWith("kratos-draft") || k.startsWith("protDone")).forEach((k) => localStorage.removeItem(k));
-            await db.ensureSeed(); await loadState(); close(); S.route = "hoje"; S.prevT = null; render(); toast("Tudo virou cinzas — recomeço");
+            await db.ensureSeed(); await loadState(); close(); S.route = "hoje"; S.prevT = null; render(); syncSaga({ silent: true }); toast("Tudo virou cinzas — recomeço");
           });
         });
       });
@@ -1189,6 +1318,7 @@ async function boot() {
   await db.ensureSeed();
   await loadState();
   render();
+  syncSaga({ silent: true }); // registra o estado da saga sem celebrar retroativo
   const splash = document.getElementById("splash");
   if (splash) {
     setTimeout(() => {

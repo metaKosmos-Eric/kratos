@@ -126,6 +126,24 @@ export function celebrateGloria(prs) {
 }
 
 // ---------------------------------------------------------------------
+// ASCENSÃO — subiu de nível / patente (RPG)
+// ---------------------------------------------------------------------
+export function celebrateAscension({ rankName, level, avatarSVG, isRankUp }) {
+  haptic("epic");
+  if (reduced()) return;
+  const el = overlay("gloria", `
+    <div class="cel-center asc">
+      <div class="gl-title">${isRankUp ? "Ascensão" : "Subiu de nível"}</div>
+      <div class="asc-avatar${isRankUp ? " up" : ""}">${avatarSVG || ""}</div>
+      <div class="asc-rank">${escapeHtml(rankName)}</div>
+      <div class="asc-lvl">Nível ${level}</div>
+    </div>`, isRankUp ? 2800 : 2000, true);
+  setTimeout(() => { shake(); }, 150);
+  setTimeout(() => sparks(innerWidth / 2, innerHeight * 0.62, isRankUp ? 28 : 14), 320);
+  return el;
+}
+
+// ---------------------------------------------------------------------
 // TRIBUTO PAGO — meta de proteína batida (contida, inline)
 // barEl: elemento .mb da proteína se visível (pode ser null)
 // ---------------------------------------------------------------------

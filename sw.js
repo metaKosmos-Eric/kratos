@@ -1,9 +1,10 @@
 // Service worker — cache offline (app shell). Dados ficam no IndexedDB.
-const CACHE = "kratos-v3";
+const CACHE = "kratos-v4";
 const ASSETS = [
   "./", "./index.html", "./manifest.webmanifest",
   "./css/styles.css",
   "./js/app.js", "./js/db.js", "./js/data.js", "./js/charts.js", "./js/celebrate.js",
+  "./js/saga.js", "./js/spartan.js",
   "./fonts/cinzel-latin.woff2", "./fonts/inter-latin.woff2",
   "./icons/icon.svg", "./icons/icon-192.png", "./icons/icon-512.png",
 ];

@@ -292,6 +292,63 @@ h1::after {
 .chron-ex { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); padding: 3px 0; font-variant-numeric: tabular-nums; }
 .chron-del { margin-top: 8px; font-size: 11px; }
 
+/* ---- SAGA (RPG) ---- */
+.hero-card { text-align: center; padding: 20px 16px 18px; position: relative; overflow: hidden; }
+.hero-card::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(70% 50% at 50% 30%, rgba(179,32,23,.10), transparent 70%);
+}
+.hero-avatar { width: 128px; height: 176px; margin: 0 auto 10px; position: relative; z-index: 1; }
+.hero-avatar .spartan { width: 100%; height: 100%; filter: drop-shadow(0 4px 8px rgba(0,0,0,.5)); }
+.hero-avatar.tier7 .spartan, .hero-avatar.tier6 .spartan { filter: drop-shadow(0 0 10px rgba(232,201,122,.4)); }
+.hero-rank { font-family: var(--display); font-size: 18px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--gold-lit); }
+.hero-lvl { font-size: 13px; color: var(--muted); margin: 2px 0 12px; }
+.hero-lvl b { color: var(--text); font-family: var(--display); }
+.xp-track { height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; box-shadow: var(--sulco); margin: 0 auto; max-width: 320px; }
+.xp-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--gold), var(--gold-lit)); transition: width .8s cubic-bezier(.25,.8,.3,1); }
+.xp-label { font-size: 11px; color: var(--muted); margin-top: 7px; }
+.xp-label b { color: var(--gold); }
+
+.poder-card { display: flex; align-items: center; justify-content: space-between; }
+.poder-num { font-family: var(--display); font-size: 34px; font-weight: 700; color: var(--blood-lit); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.poder-lab { font-size: 12px; color: var(--muted); }
+.poder-omega { width: 40px; height: 40px; color: var(--blood); opacity: .5; }
+
+.attr { margin-bottom: 14px; }
+.attr:last-child { margin-bottom: 2px; }
+.attr-top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
+.attr-top b { font-family: var(--display); color: var(--text); font-variant-numeric: tabular-nums; }
+.attr-track { height: 7px; background: var(--track); border-radius: 4px; overflow: hidden; box-shadow: var(--sulco); }
+.attr-fill { height: 100%; border-radius: 4px; transition: width .7s cubic-bezier(.25,.8,.3,1); }
+.attr-forca { background: linear-gradient(90deg, #5E100B, #B32017); }
+.attr-furia { background: linear-gradient(90deg, #8E1610, #E5443C); }
+.attr-vigor { background: linear-gradient(90deg, #5E4E33, #C9A45C); }
+.attr-resiliencia { background: linear-gradient(90deg, #4A4640, #A6A099); }
+.attr-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+.trophy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.trophy { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 12px; text-align: center; box-shadow: var(--stone); }
+.trophy.off { opacity: .5; filter: grayscale(.7); }
+.trophy-ic { width: 30px; height: 30px; margin: 0 auto 8px; display: grid; place-items: center; font-size: 20px; }
+.trophy.on .trophy-ic { color: var(--gold-lit); }
+.trophy.on .trophy-ic svg { width: 30px; height: 30px; }
+.trophy-name { font-family: var(--display); font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text); }
+.trophy.on .trophy-name { color: var(--gold-lit); }
+.trophy-desc { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.3; }
+
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 8px; }
+.stat-grid > div { text-align: center; }
+.stat-grid b { display: block; font-family: var(--display); font-size: 22px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.stat-grid span { font-size: 11px; color: var(--muted); }
+
+/* ascensão (overlay) */
+.cel-center.asc { display: flex; flex-direction: column; align-items: center; }
+.asc-avatar { width: 120px; height: 165px; margin: 8px 0; animation: stamp .5s cubic-bezier(.2,1.4,.3,1); }
+.asc-avatar.up { animation: stamp .6s cubic-bezier(.2,1.4,.3,1); }
+.asc-avatar .spartan { width: 100%; height: 100%; filter: drop-shadow(0 0 12px rgba(232,201,122,.5)); }
+.asc-rank { font-family: var(--display); font-size: 20px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--gold-lit); }
+.asc-lvl { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
 /* ---- inputs / forms ---- */
 .inp {
   background: var(--inp-bg); border: 1px solid var(--border2); border-radius: var(--radius-sm);
