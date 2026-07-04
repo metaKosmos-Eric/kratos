@@ -144,6 +144,23 @@ export function celebrateAscension({ rankName, level, avatarSVG, isRankUp }) {
 }
 
 // ---------------------------------------------------------------------
+// FERA ABATIDA — chefe semanal derrotado
+// ---------------------------------------------------------------------
+export function celebrateBoss(name) {
+  haptic("epic");
+  if (reduced()) return;
+  overlay("gloria", `
+    <div class="cel-center">
+      <div class="gl-title">Fera abatida</div>
+      <div class="boss-skull">☠</div>
+      <div class="asc-rank">${escapeHtml(name)}</div>
+      <div class="asc-lvl">Chefe da semana derrotado</div>
+    </div>`, 2400, true);
+  setTimeout(() => { shake(); }, 150);
+  setTimeout(() => sparks(innerWidth / 2, innerHeight * 0.62, 22), 320);
+}
+
+// ---------------------------------------------------------------------
 // TRIBUTO PAGO — meta de proteína batida (contida, inline)
 // barEl: elemento .mb da proteína se visível (pode ser null)
 // ---------------------------------------------------------------------

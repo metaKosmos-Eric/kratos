@@ -6,7 +6,7 @@ import * as db from "./db.js";
 import { calcGoals } from "./db.js";
 import { MEAL_TYPES } from "./data.js";
 import { lineChart, barChart } from "./charts.js";
-import { OMEGA_SVG, haptic, sparks, celebrateSeal, celebrateGloria, celebrateTributo, celebrateAscension, countUp } from "./celebrate.js";
+import { OMEGA_SVG, haptic, sparks, celebrateSeal, celebrateGloria, celebrateTributo, celebrateAscension, celebrateBoss, countUp } from "./celebrate.js";
 import { computeSaga, RANKS, ACHIEVEMENTS } from "./saga.js";
 import { spartanSVG } from "./spartan.js";
 
@@ -154,6 +154,8 @@ function render() {
     }));
 }
 
+function go(route) { S.route = route; window.scrollTo(0, 0); render(); }
+
 // =====================================================================
 // MACRO CARD (Hoje + Comida) — com count-up e ring animado
 // =====================================================================
@@ -175,6 +177,7 @@ async function currentSaga() {
 function sagaSeenFrom(saga) {
   return {
     id: "state", level: saga.level, rankIndex: saga.rankIndex,
+    bossesDefeated: saga.stats.bossesDefeated,
     achievements: saga.achievements.filter((a) => a.unlocked).map((a) => a.id),
   };
 }
@@ -190,6 +193,7 @@ async function syncSaga({ silent = false, ascensionDelay = 300 } = {}) {
   const newAch = saga.achievements.filter((a) => a.unlocked && !prevAch.has(a.id));
   const leveledUp = saga.level > (seen.level || 1);
   const rankUp = saga.rankIndex > (seen.rankIndex || 0);
+  const bossKilled = saga.stats.bossesDefeated > (seen.bossesDefeated || 0);
   await db.put("saga", sagaSeenFrom(saga));
 
   let after = ascensionDelay;
@@ -199,6 +203,10 @@ async function syncSaga({ silent = false, ascensionDelay = 300 } = {}) {
       avatarSVG: spartanSVG(saga.rank.tier, { glow: true }), isRankUp: rankUp,
     }), ascensionDelay);
     after = ascensionDelay + (rankUp ? 3000 : 2200);
+  }
+  if (bossKilled) {
+    setTimeout(() => celebrateBoss(saga.boss.name), after);
+    after += 2600;
   }
   newAch.forEach((a, i) => setTimeout(() =>
     toast(`Conquista — ${a.name}`, { omega: true, ms: 2600 }), after + i * 900));
@@ -300,6 +308,7 @@ VIEWS.hoje = () => {
       <span class="phase-pill">${S.plan.phase === "A" ? "Fase I" : "Fase II"}</span>
     </header>
     <section class="pad">
+      <button class="saga-strip" data-act="goSaga" data-sagastrip></button>
       ${macroCardHTML(g)}
       <div class="section-label">A batalha de hoje</div>
       <div data-battle>${day ? `
@@ -341,6 +350,21 @@ VIEWS.hoje = () => {
       root.querySelector('[data-act="startToday"]')?.addEventListener("click", () => day && startSession(day));
       root.querySelector('[data-act="addFood"]').addEventListener("click", () => addFoodFlow());
       root.querySelector('[data-act="addBody"]').addEventListener("click", () => addBodyFlow());
+
+      // strip da Saga (avatar + nível + XP + missões), atalho pra aba Saga
+      const strip = $("[data-sagastrip]", root);
+      const saga = await currentSaga();
+      const xpPct = saga.xpForLevel ? Math.min(100, (saga.xpIntoLevel / saga.xpForLevel) * 100) : 100;
+      const doneM = saga.missions.filter((m) => m.done).length;
+      strip.innerHTML = `
+        <div class="strip-av tier${saga.rank.tier}">${spartanSVG(saga.rank.tier, { glow: true })}</div>
+        <div class="strip-mid">
+          <div class="strip-top"><b>${esc(saga.rank.name)}</b><span>Nv ${saga.level}</span></div>
+          <div class="strip-xp"><div class="strip-xp-fill" style="width:${xpPct}%"></div></div>
+          <div class="strip-sub">Missões ${doneM}/${saga.missions.length}${saga.boss.defeated ? " · chefe abatido ☠" : ` · chefe ${r0(saga.boss.dmg)}/${saga.boss.hp}`}</div>
+        </div>
+        <svg class="strip-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 6 15 12 9 18"/></svg>`;
+      strip.addEventListener("click", () => { haptic("tick"); go("saga"); });
     },
   };
 };
@@ -418,6 +442,25 @@ async function renderSaga() {
       <div class="xp-label">${saga.xpIntoLevel} / ${saga.xpForLevel} XP${nextRank ? ` · faltam ${toNext} nível${toNext > 1 ? "s" : ""} pra <b>${esc(nextRank.name)}</b>` : " · patente máxima"}</div>
     </div>
 
+    <div class="section-label">Chefe da semana</div>
+    <div class="card boss-card ${saga.boss.defeated ? "slain" : ""}">
+      <div class="boss-head">
+        <span class="boss-name">${esc(saga.boss.name)}</span>
+        <span class="boss-hp">${saga.boss.defeated ? "ABATIDO ☠" : `${r0(saga.boss.remaining)} HP`}</span>
+      </div>
+      <div class="boss-track"><div class="boss-fill" style="width:0" data-boss="${Math.round((saga.boss.dmg / saga.boss.hp) * 100)}"></div></div>
+      <div class="boss-hint">${saga.boss.defeated ? "Fera derrotada. A próxima surge na semana que vem." : "Treine, bata metas e quebre recordes esta semana pra abatê-lo."}</div>
+    </div>
+
+    <div class="section-label">Missões de hoje · ${saga.missions.filter((m) => m.done).length}/${saga.missions.length}</div>
+    <div class="card mission-card">
+      ${saga.missions.map((m) => `<div class="mission ${m.done ? "done" : ""}">
+        <span class="mission-check">${m.done ? OMEGA_SVG : ""}</span>
+        <span class="mission-label">${esc(m.label)}</span>
+        <span class="mission-xp">+${m.xp}</span>
+      </div>`).join("")}
+    </div>
+
     <div class="card poder-card">
       <div><div class="poder-num" data-poder="${saga.poder}">0</div><div class="poder-lab">Poder de Guerra · ${poderPct}%</div></div>
       <div class="poder-omega">${OMEGA_SVG}</div>
@@ -441,6 +484,7 @@ async function renderSaga() {
   requestAnimationFrame(() => requestAnimationFrame(() => {
     root.querySelectorAll("[data-attr]").forEach((el) => { el.style.width = el.dataset.attr + "%"; });
     const xp = root.querySelector("[data-xp]"); if (xp) xp.style.width = xp.dataset.xp + "%";
+    const boss = root.querySelector("[data-boss]"); if (boss) boss.style.width = boss.dataset.boss + "%";
   }));
   countUp(root.querySelector("[data-poder]"), 0, saga.poder, 800, r0);
 }

@@ -341,6 +341,51 @@ h1::after {
 .stat-grid b { display: block; font-family: var(--display); font-size: 22px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
 .stat-grid span { font-size: 11px; color: var(--muted); }
 
+/* chefe da semana */
+.boss-card { position: relative; overflow: hidden; }
+.boss-card.slain { border-color: var(--gold-dim); }
+.boss-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.boss-name { font-family: var(--display); font-size: 15px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--text); }
+.boss-card.slain .boss-name { color: var(--gold-lit); }
+.boss-hp { font-size: 12px; color: var(--blood-lit); font-variant-numeric: tabular-nums; }
+.boss-card.slain .boss-hp { color: var(--gold-lit); }
+.boss-track { height: 10px; background: var(--track); border-radius: 5px; overflow: hidden; box-shadow: var(--sulco); }
+.boss-fill { height: 100%; border-radius: 5px; background: linear-gradient(90deg, #5E100B, #B32017, #E5443C); transition: width .8s cubic-bezier(.25,.8,.3,1); }
+.boss-card.slain .boss-fill { background: linear-gradient(90deg, var(--gold), var(--gold-lit)); }
+.boss-hint { font-size: 11px; color: var(--muted); margin-top: 8px; }
+.boss-skull { font-size: 46px; margin: 4px 0 8px; filter: drop-shadow(0 0 8px rgba(232,201,122,.4)); }
+
+/* missões de hoje */
+.mission-card { padding: 4px 16px; }
+.mission { display: flex; align-items: center; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+.mission:last-child { border-bottom: none; }
+.mission-check { width: 20px; height: 20px; flex-shrink: 0; display: grid; place-items: center; color: var(--gold-lit); border: 1px solid var(--border2); border-radius: 4px; }
+.mission.done .mission-check { border-color: var(--gold-dim); }
+.mission.done .mission-check svg { width: 14px; height: 14px; }
+.mission-label { flex: 1; font-size: 14px; color: var(--muted); }
+.mission.done .mission-label { color: var(--text); text-decoration: line-through; text-decoration-color: var(--gold-dim); }
+.mission-xp { font-family: var(--display); font-size: 12px; font-weight: 600; color: var(--gold); font-variant-numeric: tabular-nums; }
+.mission.done .mission-xp { color: var(--gold-lit); }
+
+/* strip da Saga no Hoje */
+.saga-strip {
+  width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 12px; margin-bottom: 14px; cursor: pointer; box-shadow: var(--stone);
+  transition: transform .06s, border-color .15s;
+}
+.saga-strip:active { transform: translateY(1px); border-color: var(--gold-dim); }
+.strip-av { width: 40px; height: 55px; flex-shrink: 0; }
+.strip-av .spartan { width: 100%; height: 100%; }
+.strip-mid { flex: 1; min-width: 0; }
+.strip-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.strip-top b { font-family: var(--display); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--gold-lit); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.strip-top span { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.strip-xp { height: 5px; background: var(--track); border-radius: 3px; overflow: hidden; margin: 5px 0; box-shadow: var(--sulco); }
+.strip-xp-fill { height: 100%; background: linear-gradient(90deg, var(--gold), var(--gold-lit)); border-radius: 3px; }
+.strip-sub { font-size: 11px; color: var(--muted); }
+.strip-chev { width: 18px; height: 18px; color: var(--muted); flex-shrink: 0; }
+
 /* ascensão (overlay) */
 .cel-center.asc { display: flex; flex-direction: column; align-items: center; }
 .asc-avatar { width: 120px; height: 165px; margin: 8px 0; animation: stamp .5s cubic-bezier(.2,1.4,.3,1); }
