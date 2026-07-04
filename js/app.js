@@ -1,13 +1,23 @@
 // =====================================================================
-// app.js — controlador, roteador e todas as telas do app.
+// app.js — controlador, roteador e todas as telas do Kratos.
+// Tema "Cinzas e Sangue": o app em repouso é cinza; brasa = vitória.
 // =====================================================================
 import * as db from "./db.js";
 import { calcGoals } from "./db.js";
 import { MEAL_TYPES } from "./data.js";
 import { lineChart, barChart } from "./charts.js";
+import { OMEGA_SVG, haptic, sparks, celebrateSeal, celebrateGloria, celebrateTributo, countUp } from "./celebrate.js";
 
 // ----------------------------- estado --------------------------------
-const S = { route: "hoje", profile: null, plan: null, foods: [] };
+const S = {
+  route: "hoje", profile: null, plan: null, foods: [],
+  prevT: null, prevDate: null,   // continuidade do count-up do macro card
+  justAdded: null,               // id da última refeição (brandIn)
+};
+
+const PHASE_LABEL = { A: "Fase I · Fundação — sem 1–4", B: "Fase II · Fúria — sem 5–8" };
+const PHASE_BTN = { A: "Fase I · Fundação", B: "Fase II · Fúria" };
+const REST_SECONDS = { A: 90, B: 60 };
 
 async function loadState() {
   S.profile = await db.get("profile", "me");
@@ -20,6 +30,7 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const r1 = (n) => Math.round(n * 10) / 10;
 const r0 = (n) => Math.round(n);
+const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function localISO(d) { const t = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return t.toISOString().slice(0, 10); }
 function todayStr() { return localISO(new Date()); }
@@ -30,8 +41,14 @@ function lastNDays(n) {
 }
 function dowShort(iso) { return ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"][new Date(iso + "T12:00").getDay()]; }
 function prettyDate(iso) { const d = new Date(iso + "T12:00"); return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }); }
+// chave da semana (segunda-feira como início)
+function weekKey(iso) {
+  const d = new Date(iso + "T12:00");
+  const day = (d.getDay() + 6) % 7; // 0 = segunda
+  d.setDate(d.getDate() - day);
+  return localISO(d);
+}
 
-// macros de um alimento para uma quantidade (g ou unidades)
 function macrosFor(food, qty) {
   const factor = food.per === "unid" ? qty : qty / 100;
   return { kcal: food.kcal * factor, p: food.p * factor, c: food.c * factor, f: food.f * factor };
@@ -39,7 +56,6 @@ function macrosFor(food, qty) {
 function emptyMacros() { return { kcal: 0, p: 0, c: 0, f: 0 }; }
 function addMacros(a, b) { return { kcal: a.kcal + b.kcal, p: a.p + b.p, c: a.c + b.c, f: a.f + b.f }; }
 
-// mapeia o dia da semana ao dia do plano
 function todaysDay() {
   const map = { 1: "seg", 2: "ter", 3: "qua", 4: "qui", 5: "sex" };
   const id = map[new Date().getDay()];
@@ -48,28 +64,61 @@ function todaysDay() {
 }
 function activePlan() { return S.plan.plans[S.plan.phase]; }
 
-// ----------------------------- toast/modal ---------------------------
-function toast(msg) {
+// ----------------------------- toast ---------------------------------
+// opts: { err, omega, ms, action: { label, fn } }
+function toast(msg, opts = {}) {
+  document.querySelectorAll(".toast").forEach((t) => t.remove());
   const t = document.createElement("div");
-  t.className = "toast"; t.textContent = msg;
+  t.className = "toast" + (opts.err ? " err" : "");
+  t.innerHTML = `${opts.omega ? OMEGA_SVG : ""}<span>${esc(msg)}</span>` +
+    (opts.action ? `<button class="toast-act">${esc(opts.action.label)}</button>` : "");
   document.body.appendChild(t);
   requestAnimationFrame(() => t.classList.add("show"));
-  setTimeout(() => { t.classList.remove("show"); setTimeout(() => t.remove(), 300); }, 2200);
+  const ms = opts.ms || (opts.action ? 5000 : 2200);
+  const kill = () => { t.classList.remove("show"); setTimeout(() => t.remove(), 300); };
+  const timer = setTimeout(kill, ms);
+  if (opts.action) $(".toast-act", t).addEventListener("click", () => {
+    clearTimeout(timer); kill(); opts.action.fn();
+  });
 }
 
-function modal(title, bodyHTML, onMount) {
+// ----------------------------- modal ---------------------------------
+// Pilha de modais integrada ao histórico: botão "voltar" do Android
+// fecha o modal do topo em vez de fechar o app.
+const modalStack = [];
+window.addEventListener("popstate", () => {
+  const top = modalStack[modalStack.length - 1];
+  if (top) top.doClose();
+});
+
+function modal(title, bodyHTML, onMount, opts = {}) {
   const back = document.createElement("div");
   back.className = "modal-back";
   back.innerHTML = `<div class="modal">
     <div class="modal-head"><h3>${esc(title)}</h3><button class="x" aria-label="Fechar">✕</button></div>
     <div class="modal-body">${bodyHTML}</div>
   </div>`;
-  const close = () => back.remove();
-  back.addEventListener("click", (e) => { if (e.target === back) close(); });
-  $(".x", back).addEventListener("click", close);
+  const entry = { closing: false, requested: false };
+  entry.doClose = () => {
+    if (entry.closing) return; entry.closing = true;
+    const i = modalStack.indexOf(entry); if (i >= 0) modalStack.splice(i, 1);
+    back.classList.add("closing");
+    back.addEventListener("animationend", () => back.remove(), { once: true });
+    setTimeout(() => back.remove(), 420); // rede de segurança
+    opts.onClose && opts.onClose();
+  };
+  const requestClose = () => {
+    if (entry.requested || entry.closing) return;
+    entry.requested = true;
+    history.back(); // popstate -> doClose
+  };
+  back.addEventListener("click", (e) => { if (e.target === back) requestClose(); });
+  $(".x", back).addEventListener("click", requestClose);
   document.body.appendChild(back);
-  onMount && onMount(back, close);
-  return { back, close };
+  history.pushState({ modal: true }, "");
+  modalStack.push(entry);
+  onMount && onMount(back, requestClose);
+  return { back, close: requestClose };
 }
 
 // =====================================================================
@@ -87,55 +136,139 @@ function render() {
   const app = $("#app");
   const view = VIEWS[S.route]();
   app.innerHTML = view.html;
+  // re-dispara a entrada de corte seco
+  app.style.animation = "none"; void app.offsetWidth; app.style.animation = "";
   view.mount && view.mount(app);
-  // nav
   $("#nav").innerHTML = NAV.map((n) => `
     <button class="nav-btn ${S.route === n.id ? "active" : ""}" data-route="${n.id}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${n.icon}"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="${n.icon}"/></svg>
       <span>${n.label}</span>
     </button>`).join("");
   $("#nav").querySelectorAll("[data-route]").forEach((b) =>
-    b.addEventListener("click", () => { S.route = b.dataset.route; window.scrollTo(0, 0); render(); }));
-  app.scrollTop = 0;
+    b.addEventListener("click", () => {
+      if (S.route !== b.dataset.route) haptic("tick");
+      S.route = b.dataset.route; window.scrollTo(0, 0); render();
+    }));
 }
 
-function go(route) { S.route = route; render(); }
-
 // =====================================================================
-// VIEW: HOJE  (dashboard)
+// MACRO CARD (Hoje + Comida) — com count-up e ring animado
 // =====================================================================
 async function dayTotals(iso) {
   const log = await db.getByIndex("foodlog", "date", iso);
   return log.reduce((acc, e) => addMacros(acc, e), emptyMacros());
 }
 
+function macroCardHTML(g) {
+  const bar = (key, label) => `<div class="mb ${key}">
+    <div class="mb-top"><span>${label}</span><span><b data-val="${key}">0</b><i>/${g[key === "prot" ? "p" : key === "carb" ? "c" : "f"]}g</i></span></div>
+    <div class="mb-track"><div class="mb-fill" data-fill="${key}"></div></div>
+  </div>`;
+  return `<div class="card macro-card" data-macrocard>
+    <div class="macro-head">
+      <div><div class="macro-kcal"><span data-kcal>0</span><i>/ ${g.kcal} kcal</i></div>
+        <div class="macro-sub" data-macrosub>consumido hoje</div></div>
+      <div class="ring" data-ring><span data-ringtxt>0%</span></div>
+    </div>
+    ${bar("prot", "Proteína")}${bar("carb", "Carbo")}${bar("fat", "Gordura")}
+  </div>`;
+}
+
+function animateMacroCard(root, t, g) {
+  const card = $("[data-macrocard]", root);
+  if (!card) return;
+  const today = todayStr();
+  if (S.prevDate !== today) { S.prevT = null; S.prevDate = today; }
+  const from = S.prevT || emptyMacros();
+
+  // token por card: cancela loops rAF antigos se o card re-animar (ex: dois
+  // adds rápidos), pra um loop obsoleto não sobrescrever o Ω de 100% depois.
+  const animId = (card.__anim = (card.__anim || 0) + 1);
+
+  countUp($("[data-kcal]", card), from.kcal, t.kcal, 700, r0);
+
+  // ring via rAF (sem @property — funciona em qualquer WebView)
+  const ring = $("[data-ring]", card);
+  const txt = $("[data-ringtxt]", card);
+  const p0 = g.kcal ? Math.min(100, (from.kcal / g.kcal) * 100) : 0;
+  const p1 = g.kcal ? Math.min(100, (t.kcal / g.kcal) * 100) : 0;
+  const showFull = () => { txt.innerHTML = `<span class="ring-omega">${OMEGA_SVG}</span>`; ring.classList.add("full-glow"); };
+  if (reducedMotion()) {
+    ring.style.setProperty("--p", p1);
+    if (p1 >= 100) showFull(); else txt.textContent = r0(p1) + "%";
+  } else {
+    const t0 = performance.now(); const MS = 900;
+    const step = (now) => {
+      if (card.__anim !== animId) return; // superado por uma animação mais nova
+      const k = Math.min(1, (now - t0) / MS);
+      const v = p0 + (p1 - p0) * (1 - Math.pow(1 - k, 3));
+      ring.style.setProperty("--p", v);
+      if (p1 < 100) txt.textContent = r0(v) + "%";
+      if (k < 1) requestAnimationFrame(step);
+    };
+    if (p1 >= 100) showFull();
+    requestAnimationFrame(step);
+  }
+
+  // barras (escalonadas) + forgeFlash em >=100%
+  const bars = [["prot", t.p, g.p], ["carb", t.c, g.c], ["fat", t.f, g.f]];
+  const fillColor = {
+    prot: "linear-gradient(90deg,#5E100B,#B32017)",
+    carb: "var(--ash)",
+    fat: "linear-gradient(90deg,#5E4E33,#8A7248)",
+  };
+  bars.forEach(([key, val, goal], i) => {
+    const el = $(`[data-fill="${key}"]`, card);
+    const valEl = $(`[data-val="${key}"]`, card);
+    const pct = goal ? Math.min(100, (val / goal) * 100) : 0;
+    el.style.background = fillColor[key];
+    el.style.transitionDelay = (i * 60) + "ms";
+    countUp(valEl, key === "prot" ? from.p : key === "carb" ? from.c : from.f, val, 700, r0);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      el.style.width = pct + "%";
+      if (pct >= 100) el.classList.add("done");
+    }));
+  });
+
+  // subtítulo acionável: o que falta
+  const subEl = $("[data-macrosub]", card);
+  if (t.p >= g.p && t.kcal >= g.kcal) subEl.textContent = "tributos do dia pagos";
+  else if (t.p < g.p) subEl.textContent = `faltam ${r0(g.p - t.p)}g de proteína`;
+  else subEl.textContent = `faltam ${r0(g.kcal - t.kcal)} kcal`;
+
+  S.prevT = t;
+}
+
+// =====================================================================
+// VIEW: HOJE
+// =====================================================================
 const VIEWS = {};
 
 VIEWS.hoje = () => {
   const day = todaysDay();
   const g = S.profile;
   const html = `
-    <header class="topbar"><div><h1>Olá, <span>${esc(g.name)}</span></h1>
-      <p class="sub">${new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</p></div>
-      <span class="phase-pill">Fase ${S.plan.phase}</span>
+    <header class="topbar"><div><h1>${esc(g.name)}</h1>
+      <p class="sub">${new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</p>
+      <div data-streak></div></div>
+      <span class="phase-pill">${S.plan.phase === "A" ? "Fase I" : "Fase II"}</span>
     </header>
     <section class="pad">
-      <div id="macroCard" class="card macro-card"><div class="loading">…</div></div>
-
-      <div class="section-label">Treino de hoje</div>
-      ${day ? `
+      ${macroCardHTML(g)}
+      <div class="section-label">A batalha de hoje</div>
+      <div data-battle>${day ? `
         <div class="card day-today">
           <div class="dt-head">
-            <span class="day-badge badge-${day.color}">${day.dow}</span>
+            <span class="day-badge today">${esc(day.dow)}</span>
             <div><div class="day-title">${esc(day.name)}</div><div class="day-sub">${esc(day.sub)}</div></div>
           </div>
-          <button class="btn-primary full" data-act="startToday">Iniciar / registrar treino</button>
+          <button class="btn-primary full" data-act="startToday">Entrar em batalha</button>
         </div>` : `
-        <div class="rest-card"><span>🌙</span><span><strong>Descanso.</strong> Caminhada leve, alongamento, sono de qualidade.</span></div>`}
-
-      <div class="section-label">Atalhos</div>
+        <div class="rest-card"><strong>Descanso.</strong> Até Esparta descansa — caminhada leve, alongamento, sono.</div>`}
+      </div>
+      <div class="section-label">Arsenal</div>
       <div class="quick-grid">
-        <button class="card quick" data-act="addFood"><b>+ Refeição</b><span>registrar comida</span></button>
+        <button class="card quick" data-act="addFood"><b>+ Refeição</b><span>registrar tributo</span></button>
         <button class="card quick" data-act="addBody"><b>+ Peso corporal</b><span>${g.weightKg} kg atual</span></button>
       </div>
     </section>`;
@@ -144,7 +277,21 @@ VIEWS.hoje = () => {
     html,
     async mount(root) {
       const t = await dayTotals(todayStr());
-      $("#macroCard", root).outerHTML = macroCardHTML(t, g);
+      animateMacroCard(root, t, g);
+      // streak + estado "selado"
+      const sessions = await db.getAll("sessions");
+      renderStreak($("[data-streak]", root), sessions);
+      const todays = sessions.filter((s) => s.date === todayStr());
+      if (day && todays.length) {
+        const vol = todays.reduce((a, s) => a + (s.volume || 0), 0);
+        const prCount = todays.reduce((a, s) => a + (s.prExercises?.length || 0), 0);
+        $("[data-battle]", root).innerHTML = `
+          <div class="card day-today sealed">
+            <div class="sealed-row">${OMEGA_SVG}<span>Treino selado</span></div>
+            <div class="sealed-sum">${esc(day.name)} · ${r0(vol)} kg de volume${prCount ? ` · ${prCount} recorde${prCount > 1 ? "s" : ""}` : ""}</div>
+            <button class="btn-ghost full" data-act="startToday">Registrar novamente</button>
+          </div>`;
+      }
       root.querySelector('[data-act="startToday"]')?.addEventListener("click", () => day && startSession(day));
       root.querySelector('[data-act="addFood"]').addEventListener("click", () => addFoodFlow());
       root.querySelector('[data-act="addBody"]').addEventListener("click", () => addBodyFlow());
@@ -152,39 +299,38 @@ VIEWS.hoje = () => {
   };
 };
 
-function macroBar(label, val, goal, color) {
-  const pct = goal ? Math.min(100, (val / goal) * 100) : 0;
-  return `<div class="mb">
-    <div class="mb-top"><span>${label}</span><span>${r0(val)}<i>/${goal}g</i></span></div>
-    <div class="mb-track"><div class="mb-fill" style="width:${pct}%;background:${color}"></div></div>
-  </div>`;
-}
-
-function macroCardHTML(t, g) {
-  const kpct = g.kcal ? Math.min(100, (t.kcal / g.kcal) * 100) : 0;
-  return `<div id="macroCard" class="card macro-card">
-    <div class="macro-head">
-      <div><div class="macro-kcal">${r0(t.kcal)}<i>/ ${g.kcal} kcal</i></div>
-        <div class="macro-sub">consumido hoje</div></div>
-      <div class="ring" style="--p:${kpct}"><span>${r0(kpct)}%</span></div>
-    </div>
-    ${macroBar("Proteína", t.p, g.p, "var(--accent)")}
-    ${macroBar("Carbo", t.c, g.c, "var(--blue)")}
-    ${macroBar("Gordura", t.f, g.f, "var(--orange)")}
-  </div>`;
+// streak: semanas consecutivas com >= 3 treinos (semana atual não quebra)
+function renderStreak(el, sessions) {
+  if (!el) return;
+  const perWeek = {};
+  for (const s of sessions) {
+    const wk = weekKey(s.date);
+    (perWeek[wk] ||= new Set()).add(s.date);
+  }
+  const thisWk = weekKey(todayStr());
+  let streak = 0;
+  let cursor = thisWk;
+  const back = (wk) => { const d = new Date(wk + "T12:00"); d.setDate(d.getDate() - 7); return localISO(d); };
+  if ((perWeek[thisWk]?.size || 0) >= 3) { streak++; cursor = back(thisWk); }
+  else cursor = back(thisWk); // semana em curso não conta nem quebra
+  while ((perWeek[cursor]?.size || 0) >= 3) { streak++; cursor = back(cursor); }
+  const thisCount = perWeek[thisWk]?.size || 0;
+  if (streak >= 1) el.innerHTML = `<span class="streak-pill">${OMEGA_SVG} Fúria · ${streak} semana${streak > 1 ? "s" : ""}</span>`;
+  else if (thisCount > 0) el.innerHTML = `<span class="streak-pill">${OMEGA_SVG} ${thisCount} batalha${thisCount > 1 ? "s" : ""} esta semana</span>`;
+  else el.innerHTML = "";
 }
 
 // =====================================================================
-// VIEW: TREINO (plano editável + iniciar sessão)
+// VIEW: TREINO
 // =====================================================================
 VIEWS.treino = () => {
   const pl = activePlan();
   const html = `
-    <header class="topbar"><div><h1>Treino</h1><p class="sub">${esc(pl.label)}</p></div></header>
+    <header class="topbar"><div><h1>Treino</h1><p class="sub">${esc(PHASE_LABEL[S.plan.phase])}</p></div></header>
     <section class="pad">
       <div class="phase-toggle">
-        <button class="phase-btn ${S.plan.phase === "A" ? "active" : ""}" data-phase="A">Fase A · base</button>
-        <button class="phase-btn ${S.plan.phase === "B" ? "active" : ""}" data-phase="B">Fase B · intensidade</button>
+        <button class="phase-btn ${S.plan.phase === "A" ? "active" : ""}" data-phase="A">${PHASE_BTN.A}</button>
+        <button class="phase-btn ${S.plan.phase === "B" ? "active" : ""}" data-phase="B">${PHASE_BTN.B}</button>
       </div>
       <div class="tip">${esc(pl.tip)}</div>
       ${pl.days.map((d) => dayCardHTML(d)).join("")}
@@ -195,44 +341,48 @@ VIEWS.treino = () => {
     html,
     mount(root) {
       root.querySelectorAll("[data-phase]").forEach((b) => b.addEventListener("click", async () => {
-        S.plan.phase = b.dataset.phase; await db.put("plan", S.plan); render();
+        S.plan.phase = b.dataset.phase; await db.put("plan", S.plan); haptic("tick"); render();
       }));
       root.querySelectorAll(".day-card .day-header").forEach((hd) =>
-        hd.addEventListener("click", (e) => { if (!e.target.closest("[data-stop]")) hd.closest(".day-card").classList.toggle("open"); }));
+        hd.addEventListener("click", () => hd.closest(".day-card").classList.toggle("open")));
       root.querySelectorAll('[data-act="start"]').forEach((b) =>
-        b.addEventListener("click", () => startSession(pl.days.find((d) => d.id === b.dataset.day))));
+        b.addEventListener("click", () => startSession(activePlan().days.find((d) => d.id === b.dataset.day))));
       root.querySelectorAll('[data-act="editDay"]').forEach((b) =>
-        b.addEventListener("click", () => editDay(pl.days.find((d) => d.id === b.dataset.day))));
+        b.addEventListener("click", () => editDay(activePlan().days.find((d) => d.id === b.dataset.day))));
       root.querySelector('[data-act="addDay"]').addEventListener("click", () => addDay());
     },
   };
 };
 
 function dayCardHTML(d) {
+  const isToday = todaysDay()?.id === d.id;
   const rows = d.exercises.map((x) => x.type === "cardio"
     ? `<tr class="cardio-row"><td>${esc(x.name)} <span class="cardio-tag">cardio</span></td><td>${x.duration} min</td></tr>`
     : `<tr><td>${esc(x.name)}</td><td>${x.sets} × ${esc(x.reps)}</td></tr>`).join("");
   return `<div class="day-card">
     <div class="day-header">
       <div class="day-left">
-        <span class="day-badge badge-${d.color}">${d.dow}</span>
+        <span class="day-badge${isToday ? " today" : ""}">${esc(d.dow)}</span>
         <div><div class="day-title">${esc(d.name)}</div><div class="day-sub">${esc(d.sub)}</div></div>
       </div>
       <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
     </div>
-    <div class="day-body">
+    <div class="day-body"><div class="day-in">
       <table class="ex-table">${rows}</table>
       <div class="day-actions">
-        <button class="btn-primary" data-act="start" data-day="${d.id}" data-stop>Registrar treino</button>
-        <button class="btn-ghost" data-act="editDay" data-day="${d.id}" data-stop>Editar</button>
+        <button class="btn-primary" data-act="start" data-day="${d.id}">Registrar treino</button>
+        <button class="btn-ghost" data-act="editDay" data-day="${d.id}">Editar</button>
       </div>
-    </div>
+    </div></div>
   </div>`;
 }
 
-// ---- editar dia (exercícios) ----
+// ---- editar dia ----
+// Trabalha numa CÓPIA dos exercícios; só grava no plano vivo ao salvar.
+// Fechar sem salvar descarta tudo (não corrompe S.plan).
 function editDay(day) {
-  const renderRows = () => day.exercises.map((x, i) => `
+  const work = structuredClone(day.exercises);
+  const renderRows = () => work.map((x, i) => `
     <div class="edit-row" data-i="${i}">
       <input class="inp name" value="${esc(x.name)}" placeholder="Exercício"/>
       ${x.type === "cardio"
@@ -250,7 +400,7 @@ function editDay(day) {
   modal(`Editar — ${day.name}`, body, (back, close) => {
     const collect = () => {
       back.querySelectorAll(".edit-row").forEach((row) => {
-        const i = +row.dataset.i; const ex = day.exercises[i];
+        const i = +row.dataset.i; const ex = work[i];
         ex.name = $(".name", row).value.trim();
         if (ex.type === "cardio") ex.duration = +$(".small", row).value || 0;
         else { ex.sets = +$(".sets", row).value || 0; ex.reps = $(".reps", row).value.trim(); }
@@ -259,19 +409,19 @@ function editDay(day) {
     const rerender = () => { $("#rows", back).innerHTML = renderRows(); bind(); };
     const bind = () => {
       back.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
-        collect(); day.exercises.splice(+b.dataset.del, 1); rerender();
+        collect(); work.splice(+b.dataset.del, 1); rerender();
       }));
     };
     bind();
     back.querySelectorAll("[data-add]").forEach((b) => b.addEventListener("click", () => {
       collect();
-      day.exercises.push(b.dataset.add === "cardio"
+      work.push(b.dataset.add === "cardio"
         ? { name: "Cardio", type: "cardio", duration: 15 }
         : { name: "Novo exercício", sets: 3, reps: "10–12", type: "strength" });
       rerender();
     }));
     $("[data-save]", back).addEventListener("click", async () => {
-      collect(); await db.put("plan", S.plan); close(); render(); toast("Dia atualizado");
+      collect(); day.exercises = work; await db.put("plan", S.plan); close(); render(); toast("Dia atualizado");
     });
   });
 }
@@ -280,17 +430,13 @@ function addDay() {
   const body = `
     <input id="nName" class="inp full" placeholder="Nome (ex: Peito + Tríceps)"/>
     <input id="nDow" class="inp full" placeholder="Sigla (ex: SEG)" maxlength="4"/>
-    <select id="nColor" class="inp full">
-      <option value="blue">Azul</option><option value="orange">Laranja</option>
-      <option value="red">Vermelho</option><option value="green">Verde</option><option value="gray">Cinza</option>
-    </select>
     <button class="btn-primary full" data-save>Criar dia</button>`;
   modal("Novo dia de treino", body, (back, close) => {
     $("[data-save]", back).addEventListener("click", async () => {
-      const name = $("#nName", back).value.trim(); if (!name) return toast("Dê um nome");
+      const name = $("#nName", back).value.trim(); if (!name) return toast("Dê um nome", { err: true });
       activePlan().days.push({
         id: db.uid(), dow: ($("#nDow", back).value.trim() || "—").toUpperCase(),
-        color: $("#nColor", back).value, name, sub: "", exercises: [],
+        color: "gray", name, sub: "", exercises: [],
       });
       await db.put("plan", S.plan); close(); render();
     });
@@ -298,32 +444,164 @@ function addDay() {
 }
 
 // =====================================================================
-// REGISTRAR TREINO (sessão de cargas)
+// REGISTRAR TREINO — prefill, steppers, timer de descanso, rascunho, PR
 // =====================================================================
+
+// histórico: últimas séries e melhor carga por exercício (qualquer dia)
+async function historyMaps() {
+  const all = (await db.getAll("sessions")).sort((a, b) => b.date.localeCompare(a.date));
+  const lastSets = {}, best = {};
+  for (const s of all) {
+    for (const e of s.entries) {
+      if (!(e.name in lastSets) && e.sets.length) lastSets[e.name] = e.sets;
+      for (const st of e.sets) if (st.weight > 0) best[e.name] = Math.max(best[e.name] || 0, st.weight);
+    }
+  }
+  return { lastSets, best };
+}
+
+// chave inclui a FASE (dias das duas fases compartilham id 'seg'..'sex')
+const draftKey = (day) => `kratos-draft:${todayStr()}:${S.plan.phase}:${day.id}`;
+
 async function startSession(day) {
-  // pré-carrega últimas cargas desse exercício (referência de progressão)
-  const prev = await lastWeightsFor(day);
+  const { lastSets, best } = await historyMaps();
   const strength = day.exercises.filter((x) => x.type !== "cardio");
-  const rowsHTML = strength.map((x, xi) => {
-    const sets = Array.from({ length: x.sets || 1 });
-    const ref = prev[x.name];
-    return `<div class="log-ex">
-      <div class="log-ex-head"><b>${esc(x.name)}</b><span class="muted">${x.sets}×${esc(x.reps)}${ref ? ` · última: ${ref}` : ""}</span></div>
-      <div class="log-sets">
-        ${sets.map((_, si) => `<div class="set-in">
-          <span>${si + 1}</span>
-          <input class="inp w" data-x="${xi}" data-s="${si}" data-k="w" inputmode="decimal" placeholder="kg"/>
-          <input class="inp rr" data-x="${xi}" data-s="${si}" data-k="r" inputmode="numeric" placeholder="reps"/>
-        </div>`).join("")}
+  if (!strength.length) return toast("Esse dia não tem exercícios de força", { err: true });
+
+  const names = strength.map((x) => x.name);
+  // rascunho salvo? restaura valores e séries extras.
+  // Só aceita se a lista de exercícios bater (fase/edição do dia invalidam o índice).
+  let draft = null;
+  try { draft = JSON.parse(localStorage.getItem(draftKey(day)) || "null"); } catch { draft = null; }
+  if (draft && (!Array.isArray(draft.names) || draft.names.length !== names.length
+      || draft.names.some((n, i) => n !== names[i]))) {
+    localStorage.removeItem(draftKey(day)); draft = null;
+  }
+
+  const extraSets = draft?.extra || {}; // xi -> nº total de séries
+  const setRow = (xi, si, w, r, done) => `
+    <div class="set-in${done ? " done" : ""}" data-row="${xi}_${si}">
+      <button class="set-check" data-check="${xi}_${si}" title="Série feita">${si + 1}</button>
+      <div class="stepgrp">
+        <button class="step" data-stepw="${xi}_${si}" data-d="-2.5">−</button>
+        <input class="inp" data-x="${xi}" data-s="${si}" data-k="w" inputmode="decimal" placeholder="kg" value="${w ?? ""}"/>
+        <button class="step" data-stepw="${xi}_${si}" data-d="2.5">+</button>
+      </div>
+      <div class="stepgrp">
+        <button class="step" data-stepr="${xi}_${si}" data-d="-1">−</button>
+        <input class="inp" data-x="${xi}" data-s="${si}" data-k="r" inputmode="numeric" placeholder="reps" value="${r ?? ""}"/>
+        <button class="step" data-stepr="${xi}_${si}" data-d="1">+</button>
       </div>
     </div>`;
-  }).join("");
-  const body = `<div class="log-wrap">${rowsHTML}
-    <textarea id="snote" class="inp full" placeholder="Notas (opcional)"></textarea>
-    <button class="btn-primary full" data-save>Salvar treino</button></div>`;
+
+  const exBlock = (x, xi) => {
+    const prev = lastSets[x.name] || [];
+    const nSets = extraSets[xi] || x.sets || 1;
+    const bestW = best[x.name];
+    const rows = Array.from({ length: nSets }, (_, si) => {
+      const d = draft?.v?.[`${xi}_${si}`];
+      const pv = prev[si] || prev[prev.length - 1];
+      const w = d ? d.w : (pv?.weight || "");
+      const r = d ? d.r : (pv?.reps || "");
+      return setRow(xi, si, w, r, draft?.done?.includes(`${xi}_${si}`));
+    }).join("");
+    return `<div class="log-ex" data-ex="${xi}">
+      <div class="log-ex-head"><b>${esc(x.name)}</b><span class="muted">${x.sets}×${esc(x.reps)}${bestW ? ` · recorde ${r1(bestW)}kg` : ""}</span></div>
+      <div class="log-sets" data-sets="${xi}">${rows}</div>
+      <button class="btn-ghost add-set" data-addset="${xi}">+ série</button>
+    </div>`;
+  };
+
+  const body = `
+    <div class="rest-chip" data-rest></div>
+    <div>${strength.map(exBlock).join("")}
+      <textarea id="snote" class="inp full" placeholder="Notas (opcional)" style="margin-top:12px">${esc(draft?.note || "")}</textarea>
+      <button class="btn-primary full" data-save>Selar o treino</button>
+    </div>`;
+
+  let restTimer = null;
+  const stopRest = () => { if (restTimer) { clearInterval(restTimer); restTimer = null; } };
 
   modal(`${day.dow} · ${day.name}`, body, (back, close) => {
+    const restEl = $("[data-rest]", back);
+    const startRest = () => {
+      stopRest();
+      let sec = REST_SECONDS[S.plan.phase] || 90;
+      restEl.classList.add("on"); restEl.classList.remove("zero");
+      const draw = () => {
+        const m = Math.floor(sec / 60), s = String(sec % 60).padStart(2, "0");
+        restEl.textContent = `Descanso · ${m}:${s}`;
+      };
+      draw();
+      restTimer = setInterval(() => {
+        sec--;
+        if (sec <= 0) {
+          stopRest(); restEl.classList.add("zero"); restEl.textContent = "À luta";
+          haptic("rest");
+          setTimeout(() => restEl.classList.remove("on"), 2500);
+        } else draw();
+      }, 1000);
+    };
+    restEl.addEventListener("click", () => { stopRest(); restEl.classList.remove("on"); });
+
+    // rascunho: salva a cada mudança (debounce leve)
+    let saveT = null;
+    const saveDraft = () => {
+      clearTimeout(saveT);
+      saveT = setTimeout(() => {
+        const v = {};
+        back.querySelectorAll('[data-k="w"]').forEach((inp) => {
+          const key = `${inp.dataset.x}_${inp.dataset.s}`;
+          const r = back.querySelector(`[data-x="${inp.dataset.x}"][data-s="${inp.dataset.s}"][data-k="r"]`);
+          v[key] = { w: inp.value, r: r ? r.value : "" };
+        });
+        const done = [...back.querySelectorAll(".set-in.done")].map((el) => el.dataset.row);
+        const extra = {};
+        back.querySelectorAll("[data-sets]").forEach((c) => { extra[c.dataset.sets] = c.children.length; });
+        localStorage.setItem(draftKey(day), JSON.stringify({ v, done, extra, names, note: $("#snote", back).value }));
+      }, 300);
+    };
+    back.addEventListener("input", saveDraft);
+
+    // delegação: steppers, check de série, + série
+    back.addEventListener("click", (e) => {
+      const stepW = e.target.closest("[data-stepw]");
+      const stepR = e.target.closest("[data-stepr]");
+      if (stepW || stepR) {
+        const el = stepW || stepR;
+        const [xi, si] = el.dataset[stepW ? "stepw" : "stepr"].split("_");
+        const inp = back.querySelector(`[data-x="${xi}"][data-s="${si}"][data-k="${stepW ? "w" : "r"}"]`);
+        const d = parseFloat(el.dataset.d);
+        const cur = parseFloat(inp.value) || 0;
+        const next = Math.max(0, cur + d);
+        inp.value = stepW ? (Math.round(next * 10) / 10) : Math.round(next);
+        haptic("tick"); saveDraft();
+        return;
+      }
+      const check = e.target.closest("[data-check]");
+      if (check) {
+        const row = check.closest(".set-in");
+        const on = row.classList.toggle("done");
+        if (on) { haptic("tick"); startRest(); }
+        saveDraft();
+        return;
+      }
+      const addSet = e.target.closest("[data-addset]");
+      if (addSet) {
+        const xi = addSet.dataset.addset;
+        const cont = back.querySelector(`[data-sets="${xi}"]`);
+        const si = cont.children.length;
+        const lastW = cont.querySelector(`[data-s="${si - 1}"][data-k="w"]`)?.value || "";
+        const lastR = cont.querySelector(`[data-s="${si - 1}"][data-k="r"]`)?.value || "";
+        cont.insertAdjacentHTML("beforeend", setRow(+xi, si, lastW, lastR, false));
+        haptic("tick"); saveDraft();
+      }
+    });
+
+    // salvar (guard contra double-tap: não grava duas sessões nem dispara 2 celebrações)
+    let saving = false;
     $("[data-save]", back).addEventListener("click", async () => {
+      if (saving) return; saving = true;
       const entries = strength.map((x, xi) => {
         const setsArr = [];
         back.querySelectorAll(`[data-x="${xi}"][data-k="w"]`).forEach((wEl) => {
@@ -334,48 +612,61 @@ async function startSession(day) {
         });
         return { name: x.name, sets: setsArr };
       }).filter((e) => e.sets.length);
-      if (!entries.length) return toast("Preencha ao menos uma série");
+      if (!entries.length) { saving = false; return toast("Preencha ao menos uma série", { err: true }); }
+
+      // detecção de PR contra TODO o histórico (recalcula na hora)
+      const { best: bestNow } = await historyMaps();
+      const prs = [];
+      for (const e of entries) {
+        const w = e.sets.reduce((m, st) => Math.max(m, st.weight || 0), 0);
+        if (w > 0 && bestNow[e.name] !== undefined && w > bestNow[e.name]) {
+          prs.push({ name: e.name, prev: bestNow[e.name], now: w });
+        }
+      }
+      const volume = entries.reduce((a, e) => a + e.sets.reduce((v, st) => v + (st.weight || 0) * (st.reps || 0), 0), 0);
+
       await db.put("sessions", {
         id: db.uid(), date: todayStr(), phase: S.plan.phase,
-        dayId: day.id, dayName: day.name, entries, note: $("#snote", back).value.trim(),
+        dayId: day.id, dayName: day.name, entries,
+        note: $("#snote", back).value.trim(),
+        volume, pr: prs.length > 0, prExercises: prs.map((p) => p.name),
       });
-      close(); toast("Treino salvo 💪"); if (S.route === "hoje" || S.route === "treino") render();
+      localStorage.removeItem(draftKey(day));
+      stopRest();
+      close();
+      setTimeout(() => {
+        if (prs.length) celebrateGloria(prs); else celebrateSeal();
+        toast(prs.length ? "Recorde inscrito na crônica" : "Treino selado", { omega: true });
+      }, 240);
+      render();
     });
-  });
-}
+  }, { onClose: stopRest });
 
-// última carga registrada por exercício (string resumo "kg×reps")
-async function lastWeightsFor(day) {
-  const all = (await db.getAll("sessions")).filter((s) => s.dayId === day.id).sort((a, b) => b.date.localeCompare(a.date));
-  const map = {};
-  for (const s of all) {
-    for (const e of s.entries) {
-      if (map[e.name]) continue;
-      const best = e.sets.reduce((m, st) => (st.weight > (m?.weight ?? -1) ? st : m), null);
-      if (best) map[e.name] = `${r1(best.weight)}kg×${best.reps}`;
-    }
-  }
-  return map;
+  if (draft) toast("Rascunho restaurado");
 }
 
 // =====================================================================
-// VIEW: COMIDA (registro de refeições do dia)
+// VIEW: COMIDA
 // =====================================================================
 VIEWS.comida = () => {
   const html = `
-    <header class="topbar"><div><h1>Comida</h1><p class="sub">Registro de hoje</p></div>
-      <button class="btn-primary sm" data-act="add">+ Adicionar</button></header>
+    <header class="topbar"><div><h1>Comida</h1><p class="sub">Tributos de hoje</p></div>
+      <button class="btn-primary sm" data-act="add" style="margin-top:2px">+ Adicionar</button></header>
     <section class="pad" id="foodArea"><div class="loading">…</div></section>`;
   return {
     html,
-    async mount(root) { await renderFoodArea(root);
-      root.querySelector('[data-act="add"]').addEventListener("click", () => addFoodFlow()); },
+    async mount(root) {
+      await renderFoodArea(root);
+      root.querySelector('[data-act="add"]').addEventListener("click", () => addFoodFlow());
+    },
   };
 };
 
 async function renderFoodArea(root) {
+  const area = $("#foodArea", root);
+  if (!area) return;
   const iso = todayStr();
-  const log = (await db.getByIndex("foodlog", "date", iso));
+  const log = await db.getByIndex("foodlog", "date", iso);
   const g = S.profile;
   const total = log.reduce((a, e) => addMacros(a, e), emptyMacros());
   const byMeal = {};
@@ -386,7 +677,7 @@ async function renderFoodArea(root) {
     const mt = items.reduce((a, e) => addMacros(a, e), emptyMacros());
     return `<div class="section-label">${m.label} · ${r0(mt.p)}g prot · ${r0(mt.kcal)} kcal</div>
       <div class="card meal-card">
-        ${items.map((e) => `<div class="food-row">
+        ${items.map((e) => `<div class="food-row${e.id === S.justAdded ? " just-in" : ""}" data-entry="${e.id}">
           <div><div class="fr-name">${esc(e.foodName)}</div>
             <div class="fr-sub">${r1(e.qty)}${e.per === "unid" ? " un" : " g"} · P ${r0(e.p)} C ${r0(e.c)} G ${r0(e.f)}</div></div>
           <div class="fr-right"><span class="kcal">${r0(e.kcal)}</span><button class="del" data-del="${e.id}">✕</button></div>
@@ -394,27 +685,91 @@ async function renderFoodArea(root) {
       </div>`;
   }).join("");
 
-  $("#foodArea", root).innerHTML = `
-    ${macroCardHTML(total, g)}
-    ${groups || `<div class="empty">Nada registrado hoje. Toque em <b>+ Adicionar</b>.</div>`}`;
-  root.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
-    await db.del("foodlog", b.dataset.del); await renderFoodArea(root);
-    if (S.route === "hoje") {}
+  area.innerHTML = `${macroCardHTML(g)}
+    ${groups || `<div class="empty">Nenhum tributo registrado hoje.<br>Toque em <b>+ Adicionar</b>.</div>`}`;
+  animateMacroCard(area, total, g);
+  S.justAdded = null;
+
+  // deletar com toAsh + desfazer
+  area.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const id = b.dataset.del;
+    const entry = log.find((x) => x.id === id);
+    const row = b.closest(".food-row");
+    row.classList.add("burning");
+    let finished = false; // animationend + timeout de segurança: roda 1x só
+    const finish = async () => {
+      if (finished) return; finished = true;
+      await db.del("foodlog", id);
+      await refreshFoodViews();
+      toast("Item removido", {
+        action: { label: "Desfazer", fn: async () => { await db.put("foodlog", entry); await refreshFoodViews(); } },
+      });
+    };
+    row.addEventListener("animationend", finish, { once: true });
+    setTimeout(finish, 400); // rede de segurança (reduced-motion)
+  }));
+
+  // tocar na linha = editar quantidade
+  area.querySelectorAll(".food-row").forEach((row) => row.addEventListener("click", () => {
+    const entry = log.find((x) => x.id === row.dataset.entry);
+    if (!entry) return;
+    const food = S.foods.find((f) => f.id === entry.foodId) || pseudoFood(entry);
+    pickQty(food, entry.meal, { edit: entry });
   }));
 }
 
+// reconstrói a base por 100g/unidade a partir de um lançamento antigo
+function pseudoFood(entry) {
+  const factor = entry.per === "unid" ? entry.qty : entry.qty / 100;
+  const f = factor || 1;
+  return {
+    id: entry.foodId, name: entry.foodName, per: entry.per,
+    kcal: entry.kcal / f, p: entry.p / f, c: entry.c / f, f: entry.f / f,
+  };
+}
+
 // ---- fluxo adicionar alimento ----
+async function recentFoods(limit = 8) {
+  const all = await db.getAll("foodlog");
+  const byFood = new Map();
+  for (const e of all) {
+    const prev = byFood.get(e.foodId);
+    const key = e.date + ":" + String(e.ts || 0).padStart(15, "0");
+    if (!prev || key > prev.key) byFood.set(e.foodId, { key, e });
+  }
+  return [...byFood.values()]
+    .sort((a, b) => b.key.localeCompare(a.key))
+    .slice(0, limit).map((x) => x.e);
+}
+
 function addFoodFlow() {
   const mealOpts = MEAL_TYPES.map((m) => `<option value="${m.id}">${m.label}</option>`).join("");
-  const defaultMeal = guessMeal();
   const body = `
     <select id="meal" class="inp full">${mealOpts}</select>
+    <div class="recent-chips" data-recent></div>
     <input id="q" class="inp full" placeholder="Buscar alimento (ex: frango, ovo, arroz)" autocomplete="off"/>
     <div id="results" class="results"></div>
     <button class="btn-ghost full" data-newfood>+ Criar alimento novo</button>`;
-  modal("Adicionar refeição", body, (back, close) => {
-    $("#meal", back).value = defaultMeal;
+  modal("Adicionar refeição", body, (back) => {
+    $("#meal", back).value = guessMeal();
     const resultsEl = $("#results", back);
+
+    const drawRecents = async () => {
+      const rec = await recentFoods();
+      const el = $("[data-recent]", back);
+      if (!el) return;
+      el.innerHTML = rec.map((e) => `<button class="chip" data-re="${e.id}">
+        ${esc(e.foodName)} <i>· ${r1(e.qty)}${e.per === "unid" ? "un" : "g"}</i></button>`).join("");
+      el.querySelectorAll("[data-re]").forEach((c) => c.addEventListener("click", async () => {
+        const e = rec.find((x) => x.id === c.dataset.re);
+        const food = S.foods.find((f) => f.id === e.foodId) || pseudoFood(e);
+        await commitFood(food, e.qty, $("#meal", back).value);
+        drawRecents();
+      }));
+    };
+    drawRecents();
+
     const draw = (term) => {
       const t = term.trim().toLowerCase();
       const list = (t ? S.foods.filter((f) => f.name.toLowerCase().includes(t)) : S.foods).slice(0, 40);
@@ -423,11 +778,11 @@ function addFoodFlow() {
         <span class="res-macro">${f.p}P · ${f.kcal}kcal /${f.per === "unid" ? "un" : "100g"}</span></button>`).join("")
         || `<div class="empty sm">Nada encontrado.</div>`;
       resultsEl.querySelectorAll(".res").forEach((b) => b.addEventListener("click", () =>
-        pickQty(S.foods.find((f) => f.id === b.dataset.id), $("#meal", back).value, close)));
+        pickQty(S.foods.find((f) => f.id === b.dataset.id), $("#meal", back).value, { onDone: () => { $("#q", back).value = ""; draw(""); drawRecents(); } })));
     };
     draw("");
     $("#q", back).addEventListener("input", (e) => draw(e.target.value));
-    $("[data-newfood]", back).addEventListener("click", () => { close(); newFood(); });
+    $("[data-newfood]", back).addEventListener("click", () => newFood(() => { draw($("#q", back).value); drawRecents(); }));
   });
 }
 
@@ -436,33 +791,90 @@ function guessMeal() {
   if (h < 10) return "cafe"; if (h < 14) return "almoco"; if (h < 17) return "pre"; if (h < 21) return "jantar"; return "lanche";
 }
 
-function pickQty(food, meal, closePrev) {
+// atualiza a tela ativa (Comida ou Hoje) após qualquer mudança no foodlog
+async function refreshFoodViews() {
+  if (S.route === "comida") await renderFoodArea($("#app"));
+  else if (S.route === "hoje") {
+    const t = await dayTotals(todayStr());
+    animateMacroCard($("#app"), t, S.profile);
+  }
+}
+
+// grava um lançamento e cuida do TRIBUTO + refresh
+async function commitFood(food, qty, meal, editEntry) {
+  const m = macrosFor(food, qty);
+  const id = editEntry ? editEntry.id : db.uid();
+  const oldP = editEntry ? (editEntry.p || 0) : 0;
+  await db.put("foodlog", {
+    id, date: editEntry ? editEntry.date : todayStr(), meal,
+    foodId: food.id, foodName: food.name, per: food.per, qty,
+    ts: Date.now(), ...m,
+  });
+  S.justAdded = id;
+  haptic("ok");
+  // tributo dispara também via edição que cruza a meta (delta = p novo − p antigo),
+  // desde que o lançamento seja de hoje.
+  const forToday = !editEntry || editEntry.date === todayStr();
+  const paid = forToday ? await maybeTributo(m.p - oldP) : false;
+  if (!paid) toast(editEntry ? "Quantidade atualizada" : "Adicionado");
+  await refreshFoodViews();
+}
+
+async function maybeTributo(addedP) {
+  const g = S.profile;
+  const key = "protDone:" + todayStr();
+  if (localStorage.getItem(key)) return false;
+  const t = await dayTotals(todayStr()); // já inclui o novo lançamento
+  if (t.p >= g.p && t.p - addedP < g.p) {
+    localStorage.setItem(key, "1");
+    celebrateTributo(document.querySelector(".mb.prot"));
+    toast("Tributo pago — proteína do dia", { omega: true, ms: 3200 });
+    return true;
+  }
+  return false;
+}
+
+function pickQty(food, meal, opts = {}) {
   const unit = food.per === "unid";
-  const def = unit ? 1 : 100;
+  const editing = opts.edit;
+  const def = editing ? editing.qty : (unit ? 1 : 100);
+  const stepQ = unit ? 1 : 10;
   const body = `
-    <div class="qty-head"><b>${esc(food.name)}</b><span class="muted">${food.kcal} kcal · ${food.p}g prot / ${unit ? "unidade" : "100 g"}</span></div>
+    <div class="qty-head"><b>${esc(food.name)}</b><span class="muted">${r0(food.kcal)} kcal · ${r1(food.p)}g prot / ${unit ? "unidade" : "100 g"}</span></div>
     <div class="qty-row">
-      <input id="qty" class="inp" value="${def}" inputmode="decimal"/>
+      <div class="stepgrp" style="flex:1">
+        <button class="step" data-q="-${stepQ}">−</button>
+        <input id="qty" class="inp" value="${def}" inputmode="decimal"/>
+        <button class="step" data-q="${stepQ}">+</button>
+      </div>
       <span class="u">${unit ? "unidade(s)" : "gramas"}</span>
     </div>
     <div id="preview" class="qty-prev"></div>
-    <button class="btn-primary full" data-add>Adicionar</button>`;
-  modal(esc(food.name), body, (back, close) => {
+    <button class="btn-primary full" data-add>${editing ? "Salvar" : "Adicionar"}</button>`;
+  modal(editing ? "Editar item" : esc(food.name), body, (back, close) => {
     const prev = $("#preview", back);
-    const upd = () => { const m = macrosFor(food, parseFloat($("#qty", back).value) || 0);
-      prev.innerHTML = `<b>${r0(m.kcal)}</b> kcal · P ${r0(m.p)} · C ${r0(m.c)} · G ${r0(m.f)}`; };
-    upd(); $("#qty", back).addEventListener("input", upd);
+    const upd = () => {
+      const m = macrosFor(food, parseFloat($("#qty", back).value) || 0);
+      prev.innerHTML = `<b>${r0(m.kcal)}</b> kcal · P ${r0(m.p)} · C ${r0(m.c)} · G ${r0(m.f)}`;
+    };
+    upd();
+    $("#qty", back).addEventListener("input", upd);
+    back.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", () => {
+      const inp = $("#qty", back);
+      const next = Math.max(0, (parseFloat(inp.value) || 0) + parseFloat(b.dataset.q));
+      inp.value = r1(next); haptic("tick"); upd();
+    }));
     $("[data-add]", back).addEventListener("click", async () => {
-      const qty = parseFloat($("#qty", back).value) || 0; if (qty <= 0) return toast("Quantidade inválida");
-      const m = macrosFor(food, qty);
-      await db.put("foodlog", { id: db.uid(), date: todayStr(), meal, foodId: food.id,
-        foodName: food.name, per: food.per, qty, ...m });
-      close(); closePrev && closePrev(); toast("Adicionado"); render();
+      const qty = parseFloat($("#qty", back).value) || 0;
+      if (qty <= 0) return toast("Quantidade inválida", { err: true });
+      await commitFood(food, qty, meal, editing);
+      close();
+      opts.onDone && opts.onDone();
     });
   });
 }
 
-function newFood() {
+function newFood(onSaved) {
   const body = `
     <input id="fn" class="inp full" placeholder="Nome do alimento"/>
     <select id="fper" class="inp full"><option value="100g">Valores por 100 g</option><option value="unid">Valores por unidade</option></select>
@@ -475,30 +887,29 @@ function newFood() {
     <button class="btn-primary full" data-save>Salvar alimento</button>`;
   modal("Novo alimento", body, (back, close) => {
     $("[data-save]", back).addEventListener("click", async () => {
-      const name = $("#fn", back).value.trim(); if (!name) return toast("Dê um nome");
+      const name = $("#fn", back).value.trim(); if (!name) return toast("Dê um nome", { err: true });
       const food = { id: db.uid(), custom: true, group: "Custom", name, per: $("#fper", back).value,
         kcal: +$("#fk", back).value || 0, p: +$("#fp", back).value || 0, c: +$("#fc", back).value || 0, f: +$("#ff", back).value || 0 };
-      if (food.per === "unid") food.unitGrams = 0;
-      await db.put("foods", food); await loadState(); close(); toast("Alimento criado"); addFoodFlow();
+      await db.put("foods", food); await loadState(); close(); toast("Alimento forjado");
+      onSaved && onSaved();
     });
   });
 }
 
 // =====================================================================
-// VIEW: EVOLUÇÃO (peso corporal + cargas + insights)
+// VIEW: EVOLUÇÃO
 // =====================================================================
 VIEWS.evolucao = () => {
   const html = `
-    <header class="topbar"><div><h1>Evolução</h1><p class="sub">Seu progresso ao longo do tempo</p></div></header>
+    <header class="topbar"><div><h1>Evolução</h1><p class="sub">A crônica da guerra</p></div></header>
     <section class="pad" id="evo"><div class="loading">…</div></section>`;
   return { html, async mount() { await renderEvo(); } };
 };
 
-let evoSel = null; // exercício selecionado no gráfico de progressão
+let evoSel = null;
 
 async function renderEvo() {
   const g = S.profile;
-  // --- insights semanais ---
   const days = lastNDays(7);
   const protByDay = [];
   for (const iso of days) {
@@ -509,18 +920,19 @@ async function renderEvo() {
   const hit = protByDay.filter((d) => d.on).length;
   const avgKcal = await avgKcalLast(7);
 
-  // --- peso corporal ---
   const body = (await db.getAll("bodylog")).sort((a, b) => a.date.localeCompare(b.date));
   const bodySeries = body.map((b) => ({ y: b.weightKg, label: prettyDate(b.date) }));
   const bDelta = body.length >= 2 ? r1(body[body.length - 1].weightKg - body[0].weightKg) : null;
 
-  // --- progressão de carga por exercício ---
   const sessions = (await db.getAll("sessions")).sort((a, b) => a.date.localeCompare(b.date));
   const exNames = [...new Set(sessions.flatMap((s) => s.entries.map((e) => e.name)))];
   const sel = (evoSel && exNames.includes(evoSel)) ? evoSel : (exNames[0] || "");
   const strSeries = strengthSeries(sessions, sel);
 
+  const chron = [...sessions].reverse().slice(0, 12);
+
   const root = $("#evo");
+  if (!root) return;
   root.innerHTML = `
     <div class="card insight">
       <div class="ins-head">Resumo da semana</div>
@@ -534,7 +946,7 @@ async function renderEvo() {
 
     <div class="section-label">Peso corporal</div>
     <div class="card">
-      ${lineChart(bodySeries, { color: "#5ab4ff" })}
+      ${lineChart(bodySeries, { color: "#A6A099", emptyMsg: "O corpo ainda não foi pesado." })}
       <button class="btn-ghost full" data-act="addBody">+ Registrar peso de hoje</button>
     </div>
 
@@ -542,15 +954,57 @@ async function renderEvo() {
     <div class="card">
       ${exNames.length ? `<select id="exSel" class="inp full">
         ${exNames.map((n) => `<option ${n === sel ? "selected" : ""}>${esc(n)}</option>`).join("")}
-      </select>${lineChart(strSeries, { color: "#c8f55a" })}
-      <div class="muted center">maior carga registrada por treino (kg)</div>`
-      : `<div class="empty">Registre treinos pra ver a evolução das cargas.</div>`}
-    </div>`;
+      </select>${lineChart(strSeries, { color: "#C3271F" })}
+      <div class="muted center">maior carga por treino (kg) · ponto dourado = recorde</div>`
+      : `<div class="empty">A forja está fria.<br>Registre um treino pra acender.</div>`}
+    </div>
+
+    <div class="section-label">Crônica de batalhas</div>
+    ${chron.length ? `<div class="card meal-card" style="padding:4px 16px">
+      ${chron.map((s) => chronRowHTML(s)).join("")}
+    </div>` : `<div class="empty">Nenhuma batalha registrada ainda.</div>`}`;
 
   root.querySelector('[data-act="addBody"]')?.addEventListener("click", () => addBodyFlow());
-  root.querySelector("#exSel")?.addEventListener("change", (e) => {
-    evoSel = e.target.value; renderEvo();
+  root.querySelector("#exSel")?.addEventListener("change", (e) => { evoSel = e.target.value; renderEvo(); });
+
+  // crônica: expandir + deletar (2 toques)
+  root.querySelectorAll(".chron-row").forEach((row) => {
+    row.addEventListener("click", (e) => {
+      if (e.target.closest("[data-delsess]")) return;
+      row.classList.toggle("open");
+    });
   });
+  root.querySelectorAll("[data-delsess]").forEach((b) => b.addEventListener("click", async () => {
+    if (b.dataset.armed) {
+      await db.del("sessions", b.dataset.delsess);
+      toast("Batalha apagada da crônica");
+      renderEvo();
+    } else {
+      b.dataset.armed = "1"; b.textContent = "Confirmar exclusão?";
+      setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.textContent = "Apagar este treino"; } }, 2600);
+    }
+  }));
+}
+
+function chronRowHTML(s) {
+  const bestOf = (e) => e.sets.reduce((m, st) => (st.weight > (m?.weight ?? -1) ? st : m), null);
+  const vol = s.volume ?? s.entries.reduce((a, e) => a + e.sets.reduce((v, st) => v + (st.weight || 0) * (st.reps || 0), 0), 0);
+  return `<div class="chron-row">
+    <div class="chron-head">
+      <span class="chron-date">${dowShort(s.date)} ${prettyDate(s.date)}</span>
+      <span class="chron-name">${esc(s.dayName)}</span>
+      ${s.pr ? `<span class="chron-pr">PR</span>` : ""}
+      <span class="chron-vol">${r0(vol)} kg</span>
+    </div>
+    <div class="chron-body">
+      ${s.entries.map((e) => {
+        const b = bestOf(e);
+        return `<div class="chron-ex"><span>${esc(e.name)}${s.prExercises?.includes(e.name) ? " ★" : ""}</span><span>${e.sets.length}× · melhor ${b ? `${r1(b.weight)}kg×${b.reps}` : "—"}</span></div>`;
+      }).join("")}
+      ${s.note ? `<div class="muted" style="margin-top:6px">"${esc(s.note)}"</div>` : ""}
+      <button class="btn-danger chron-del" data-delsess="${s.id}">Apagar este treino</button>
+    </div>
+  </div>`;
 }
 
 function strengthSeries(sessions, name) {
@@ -559,7 +1013,7 @@ function strengthSeries(sessions, name) {
     const e = s.entries.find((x) => x.name === name);
     if (!e) continue;
     const best = e.sets.reduce((m, st) => Math.max(m, st.weight || 0), 0);
-    if (best > 0) out.push({ y: best, label: prettyDate(s.date) });
+    if (best > 0) out.push({ y: best, label: prettyDate(s.date), pr: !!s.prExercises?.includes(name) });
   }
   return out;
 }
@@ -576,23 +1030,35 @@ async function avgKcalLast(n) {
 function addBodyFlow() {
   const iso = todayStr();
   const body = `
-    <div class="qty-row"><input id="bw" class="inp" inputmode="decimal" value="${S.profile.weightKg}"/><span class="u">kg</span></div>
+    <div class="qty-row">
+      <div class="stepgrp" style="flex:1">
+        <button class="step" data-q="-0.1">−</button>
+        <input id="bw" class="inp" inputmode="decimal" value="${S.profile.weightKg}"/>
+        <button class="step" data-q="0.1">+</button>
+      </div>
+      <span class="u">kg</span>
+    </div>
     <p class="muted">Registrando para hoje (${prettyDate(iso)}).</p>
-    <button class="btn-primary full" data-save>Salvar peso</button>`;
+    <button class="btn-primary full" data-save>Registrar na crônica</button>`;
   modal("Peso corporal", body, (back, close) => {
+    back.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", () => {
+      const inp = $("#bw", back);
+      inp.value = r1(Math.max(0, (parseFloat(inp.value) || 0) + parseFloat(b.dataset.q)));
+      haptic("tick");
+    }));
     $("[data-save]", back).addEventListener("click", async () => {
-      const w = parseFloat($("#bw", back).value); if (!w) return toast("Peso inválido");
+      const w = parseFloat($("#bw", back).value); if (!w) return toast("Peso inválido", { err: true });
       await db.put("bodylog", { date: iso, weightKg: w });
-      // mantém o peso do perfil sincronizado (afeta metas)
-      S.profile.weightKg = w; const gg = calcGoals(S.profile);
-      S.profile = { ...S.profile, ...gg }; await db.put("profile", S.profile);
-      close(); toast("Peso registrado"); render();
+      S.profile.weightKg = w;
+      if (!S.profile.manual) Object.assign(S.profile, calcGoals(S.profile));
+      await db.put("profile", S.profile);
+      close(); haptic("ok"); toast("Registrado na crônica"); render();
     });
   });
 }
 
 // =====================================================================
-// VIEW: PERFIL (metas, perfil, backup)
+// VIEW: PERFIL
 // =====================================================================
 VIEWS.perfil = () => {
   const p = S.profile;
@@ -629,11 +1095,11 @@ VIEWS.perfil = () => {
         <button class="btn-ghost full" data-act="import">⬆ Importar backup</button>
         <input type="file" id="fileIn" accept="application/json" hidden/>
       </div>
-      <div class="section-label danger-label">Zona de perigo</div>
+      <div class="section-label danger-label">Ira dos deuses</div>
       <div class="card">
-        <button class="btn-danger full" data-act="reset">Apagar tudo e recomeçar</button>
+        <button class="btn-danger full" data-act="reset">Reduzir tudo a cinzas</button>
       </div>
-      <p class="muted center" style="margin:18px 0 4px">Plano Eric · PWA offline</p>
+      <p class="muted center" style="margin:18px 0 4px">KRATOS · PWA offline</p>
     </section>`;
 
   return {
@@ -641,7 +1107,7 @@ VIEWS.perfil = () => {
     mount(root) {
       const drawGoals = () => {
         const man = $("#pman", root).checked;
-        const g = man ? S.profile : calcGoals(readProfile(root, true));
+        const g = man ? S.profile : calcGoals(readProfile(root));
         $("#goalsBox", root).innerHTML = `<div class="grid2 goals">
           <label>Kcal<input id="gk" class="inp" ${man ? "" : "disabled"} value="${g.kcal}"/></label>
           <label>Proteína<input id="gp" class="inp" ${man ? "" : "disabled"} value="${g.p}"/></label>
@@ -651,7 +1117,7 @@ VIEWS.perfil = () => {
         drawCalc();
       };
       const drawCalc = () => {
-        const pr = readProfile(root, true);
+        const pr = readProfile(root);
         const sx = pr.sex === "f" ? -161 : 5;
         const bmr = 10 * pr.weightKg + 6.25 * pr.heightCm - 5 * pr.age + sx;
         const tdee = bmr * pr.activity;
@@ -668,33 +1134,35 @@ VIEWS.perfil = () => {
 
       $('[data-act="saveProfile"]', root).addEventListener("click", async () => {
         const man = $("#pman", root).checked;
-        let prof = readProfile(root, false);
+        const prof = readProfile(root);
         if (man) { prof.kcal = +$("#gk", root).value; prof.p = +$("#gp", root).value; prof.c = +$("#gc", root).value; prof.f = +$("#gf", root).value; }
-        else { Object.assign(prof, calcGoals(prof)); }
-        S.profile = prof; await db.put("profile", prof); toast("Perfil salvo"); render();
+        else Object.assign(prof, calcGoals(prof));
+        S.profile = prof; await db.put("profile", prof); haptic("ok"); toast("Perfil salvo"); render();
       });
 
       $('[data-act="export"]', root).addEventListener("click", async () => {
         const data = await db.exportAll();
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
         const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob); a.download = `plano-eric-backup-${todayStr()}.json`; a.click();
+        a.href = URL.createObjectURL(blob); a.download = `kratos-backup-${todayStr()}.json`; a.click();
         URL.revokeObjectURL(a.href); toast("Backup exportado");
       });
       $('[data-act="import"]', root).addEventListener("click", () => $("#fileIn", root).click());
       $("#fileIn", root).addEventListener("change", async (e) => {
         const file = e.target.files[0]; if (!file) return;
-        try { const data = JSON.parse(await file.text());
-          if (data._app !== "plano-eric") return toast("Arquivo inválido");
+        try {
+          const data = JSON.parse(await file.text());
+          if (data._app !== "plano-eric") return toast("Arquivo inválido", { err: true });
           await db.importAll(data); await loadState(); toast("Backup restaurado"); render();
-        } catch { toast("Erro ao ler arquivo"); }
+        } catch { toast("Erro ao ler arquivo", { err: true }); }
       });
       $('[data-act="reset"]', root).addEventListener("click", () => {
-        modal("Apagar tudo?", `<p>Isso apaga treinos, refeições, pesos e volta ao padrão. Não dá pra desfazer.</p>
-          <button class="btn-danger full" data-yes>Sim, apagar tudo</button>`, (back, close) => {
+        modal("Reduzir tudo a cinzas?", `<p style="margin-bottom:4px">Treinos, refeições e pesos serão apagados. Não dá pra desfazer.</p>
+          <button class="btn-danger full" data-yes>Sim — cinzas</button>`, (back, close) => {
           $("[data-yes]", back).addEventListener("click", async () => {
             for (const s of ["profile", "plan", "sessions", "foods", "foodlog", "bodylog"]) await db.clearStore(s);
-            await db.ensureSeed(); await loadState(); close(); S.route = "hoje"; render(); toast("Tudo recomeçado");
+            Object.keys(localStorage).filter((k) => k.startsWith("kratos-draft") || k.startsWith("protDone")).forEach((k) => localStorage.removeItem(k));
+            await db.ensureSeed(); await loadState(); close(); S.route = "hoje"; S.prevT = null; render(); toast("Tudo virou cinzas — recomeço");
           });
         });
       });
@@ -702,8 +1170,8 @@ VIEWS.perfil = () => {
   };
 };
 
-function readProfile(root, asNumbersOnly) {
-  const base = asNumbersOnly ? { ...S.profile } : { ...S.profile };
+function readProfile(root) {
+  const base = { ...S.profile };
   base.weightKg = +$("#pw", root).value || S.profile.weightKg;
   base.heightCm = +$("#ph", root).value || S.profile.heightCm;
   base.age = +$("#pa", root).value || S.profile.age;
@@ -721,6 +1189,15 @@ async function boot() {
   await db.ensureSeed();
   await loadState();
   render();
+  const splash = document.getElementById("splash");
+  if (splash) {
+    setTimeout(() => {
+      splash.style.transition = "opacity .25s";
+      splash.style.opacity = "0";
+      splash.addEventListener("transitionend", () => splash.remove(), { once: true });
+      setTimeout(() => splash.remove(), 600);
+    }, 420);
+  }
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   }

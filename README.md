@@ -3,23 +3,35 @@
 App pessoal pra acompanhar treino, cargas, peso corporal e alimentação.
 100% offline: nada sai do aparelho. Sem build, sem servidor de backend, sem dependências.
 
+Tema **"Cinzas e Sangue"** (God of War): carvão quente + cinzas, vermelho-sangue como
+único accent em repouso, ouro apenas em filetes e celebrações (Ω, meandro grego, louro).
+
 ## Telas
-- **Hoje** — treino do dia + anel/barras de macros consumidos vs meta + atalhos.
-- **Treino** — plano editável (Fase A/B), edição de exercícios e dias, e registro de cargas (peso×reps por série).
-- **Comida** — busca na base brasileira embutida, quantidade com prévia de macros, log agrupado por refeição.
-- **Evolução** — resumo da semana (proteína X/7, kcal média, Δ peso), gráfico de peso corporal e progressão de carga por exercício.
+- **Hoje** — batalha do dia (com estado "treino selado"), streak de semanas, anel/barras de macros com count-up e atalhos.
+- **Treino** — plano editável (Fase I/II). Registro de cargas com prefill da última sessão, steppers ±2,5kg/±1 rep, check de série que dispara **timer de descanso**, rascunho automático (localStorage) e **detecção de recorde pessoal**.
+- **Comida** — chips de alimentos recentes (re-add em 1 toque), busca na base brasileira embutida, adicionar-e-continuar, edição por toque, delete com desfazer. Meta de proteína batida = celebração "Tributo pago" (1x/dia).
+- **Evolução** — resumo da semana, peso corporal, progressão de carga (ponto dourado = PR) e **crônica de batalhas** (histórico de sessões, expansível e deletável).
 - **Perfil** — dados + metas (calculadas por Mifflin-St Jeor ou na mão), backup export/import (.json) e reset.
+
+## Celebrações
+- **Selo de guerra** — treino salvo: carimbo Ω dourado + brasas + vibração.
+- **Glória** — novo recorde: louros se desenhando, count-up da carga, brasas, vibração épica.
+- **Tributo pago** — meta de proteína do dia: filete dourado na barra + mini-brasas + toast Ω.
+
+`prefers-reduced-motion` degrada tudo pra feedback sóbrio.
 
 ## Estrutura
 ```
 fit-app/
-├─ index.html            # shell + nav inferior
+├─ index.html            # shell + splash (Ω se desenhando) + nav inferior
 ├─ manifest.webmanifest  # PWA instalável
-├─ sw.js                 # service worker (cache offline do app)
-├─ css/styles.css        # tema dark/lime
-├─ icons/                # ícones gerados (192/512/maskable + svg)
+├─ sw.js                 # service worker (cache offline do app + fontes)
+├─ css/styles.css        # tema "Cinzas e Sangue"
+├─ fonts/                # Cinzel + Inter (woff2 self-hosted, latin)
+├─ icons/                # Ω sangue/bronze (192/512/maskable + svg)
 └─ js/
    ├─ app.js             # roteador + todas as telas
+   ├─ celebrate.js       # celebrações, brasas, haptics, count-up
    ├─ db.js              # IndexedDB (stores, seed, backup) + cálculo de metas
    ├─ data.js            # base de alimentos BR + plano de treino (seed)
    └─ charts.js          # gráficos SVG (linha/barra) sem libs
