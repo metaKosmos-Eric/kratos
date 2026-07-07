@@ -7,12 +7,13 @@
 //   foods    (key id, idx name)   -> catálogo de alimentos
 //   foodlog  (key id, idx date)   -> refeições registradas
 //   bodylog  (key date)           -> peso corporal por dia
+//   saga     (key 'state')        -> RPG: nível/conquistas já celebrados
 // =====================================================================
 
 import { SEED_FOODS, SEED_PLANS } from "./data.js";
 
 const DB_NAME = "plano-eric";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let _db = null;
 
 export function openDB() {
@@ -36,6 +37,7 @@ export function openDB() {
         l.createIndex("date", "date");
       }
       if (!db.objectStoreNames.contains("bodylog")) db.createObjectStore("bodylog", { keyPath: "date" });
+      if (!db.objectStoreNames.contains("saga")) db.createObjectStore("saga", { keyPath: "id" });
     };
     req.onsuccess = () => { _db = req.result; resolve(_db); };
     req.onerror = () => reject(req.error);
@@ -123,11 +125,12 @@ export async function exportAll() {
     foods: await getAll("foods"),
     foodlog: await getAll("foodlog"),
     bodylog: await getAll("bodylog"),
+    saga: await getAll("saga"),
   };
 }
 
 export async function importAll(data) {
-  const stores = ["profile", "plan", "sessions", "foods", "foodlog", "bodylog"];
+  const stores = ["profile", "plan", "sessions", "foods", "foodlog", "bodylog", "saga"];
   for (const s of stores) {
     if (!Array.isArray(data[s])) continue;
     await clearStore(s);
